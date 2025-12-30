@@ -49,6 +49,8 @@ public final class WeaviateSinkConfig extends AbstractConfig {
     private final Integer maxConnectionRetries;
     private final Integer maxTimeoutRetries;
     private final Integer retryInterval;
+    private final Integer retryMax;
+    private final Integer retryBackoffMs;
     private final Integer batchSize;
     private final Integer poolSize;
     private final Boolean deleteEnabled;
@@ -125,6 +127,14 @@ public final class WeaviateSinkConfig extends AbstractConfig {
     private static final String RETRY_INTERVAL_DOC = "Interval between each retry";
     private static final int RETRY_INTERVAL_DEFAULT = RETRIES_INTERVAL;
 
+    public static final String RETRY_MAX_CONFIG = "retry.max";
+    private static final String RETRY_MAX_DOC = "Maximum number of retries to perform";
+    private static final int RETRY_MAX_DEFAULT = 3;
+
+    public static final String RETRY_BACKOFF_MS_CONFIG = "retry.backoff.ms";
+    private static final String RETRY_BACKOFF_MS_DOC = "Backoff time between each retry in milliseconds";
+    private static final int RETRY_BACKOFF_MS_DEFAULT = 1000;
+
     public static final String BATCH_SIZE_CONFIG = "batch.size";
     private static final String BATCH_SIZE_DOC = "Number of records per batch";
     private static final int BATCH_SIZE_DEFAULT = BATCH_SIZE;
@@ -159,6 +169,8 @@ public final class WeaviateSinkConfig extends AbstractConfig {
             .define(MAX_CONNECTION_RETRIES_CONFIG, ConfigDef.Type.INT, MAX_CONNECTION_RETRIES_DEFAULT, ConfigDef.Importance.LOW, MAX_CONNECTION_RETRIES_DOC)
             .define(MAX_TIMEOUT_RETRIES_CONFIG, ConfigDef.Type.INT, MAX_TIMEOUT_RETRIES_DEFAULT, ConfigDef.Importance.LOW, MAX_TIMEOUT_RETRIES_DOC)
             .define(RETRY_INTERVAL_CONFIG, ConfigDef.Type.INT, RETRY_INTERVAL_DEFAULT, ConfigDef.Importance.LOW, RETRY_INTERVAL_DOC)
+            .define(RETRY_MAX_CONFIG, ConfigDef.Type.INT, RETRY_MAX_DEFAULT, ConfigDef.Importance.LOW, RETRY_MAX_DOC)
+            .define(RETRY_BACKOFF_MS_CONFIG, ConfigDef.Type.INT, RETRY_BACKOFF_MS_DEFAULT, ConfigDef.Importance.LOW, RETRY_BACKOFF_MS_DOC)
             .define(BATCH_SIZE_CONFIG, ConfigDef.Type.INT, BATCH_SIZE_DEFAULT, ConfigDef.Importance.LOW, BATCH_SIZE_DOC)
             .define(POOL_SIZE_CONFIG, ConfigDef.Type.INT, POOL_SIZE_DEFAULT, ConfigDef.Importance.LOW, POOL_SIZE_DOC)
             .define(AWAIT_TERMINATION_MS_CONFIG, ConfigDef.Type.INT, AWAIT_TERMINATION_MS_DEFAULT, ConfigDef.Importance.LOW, AWAIT_TERMINATION_MS_DOC)
@@ -183,6 +195,8 @@ public final class WeaviateSinkConfig extends AbstractConfig {
         maxConnectionRetries = getInt(MAX_CONNECTION_RETRIES_CONFIG);
         maxTimeoutRetries = getInt(MAX_TIMEOUT_RETRIES_CONFIG);
         retryInterval = getInt(RETRY_INTERVAL_CONFIG);
+        retryMax = getInt(RETRY_MAX_CONFIG);
+        retryBackoffMs = getInt(RETRY_BACKOFF_MS_CONFIG);
         batchSize = getInt(BATCH_SIZE_CONFIG);
         poolSize = getInt(POOL_SIZE_CONFIG);
         awaitTerminationMs = getInt(AWAIT_TERMINATION_MS_CONFIG);
@@ -264,6 +278,14 @@ public final class WeaviateSinkConfig extends AbstractConfig {
         return retryInterval;
     }
 
+    public Integer getRetryMax() {
+        return retryMax;
+    }
+
+    public Integer getRetryBackoffMs() {
+        return retryBackoffMs;
+    }
+
     public Integer getBatchSize() {
         return batchSize;
     }
@@ -274,6 +296,14 @@ public final class WeaviateSinkConfig extends AbstractConfig {
 
     public Boolean getDeleteEnabled() {
         return deleteEnabled;
+    }
+
+    public Boolean getDlqEnabled() {
+        return dlqEnabled;
+    }
+
+    public String getDlqTopic() {
+        return dlqTopic;
     }
 
     public Map<String, String> getHeaders() {

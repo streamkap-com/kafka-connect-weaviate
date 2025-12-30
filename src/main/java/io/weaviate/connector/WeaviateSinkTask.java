@@ -27,19 +27,26 @@ import io.weaviate.connector.idstrategy.IDStrategy;
 import io.weaviate.connector.vectorstrategy.VectorStrategy;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.errors.RetriableException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.Map;
 
 public class WeaviateSinkTask extends SinkTask {
+    private static final Logger log = LoggerFactory.getLogger(WeaviateSinkTask.class);
     WeaviateClient client;
     private String collectionMappingRule;
     private IDStrategy documentIdStrategy;
     private VectorStrategy vectorStrategy;
     private ObjectsBatcher objectsBatcher;
     private WeaviateSinkConfig config;
+
+    private int maxRetries;
+    private long retryBackoffMs;
 
     @Override
     public String version() {
@@ -49,6 +56,8 @@ public class WeaviateSinkTask extends SinkTask {
     @Override
     public void start(Map<String, String> map) {
         this.config = new WeaviateSinkConfig(WeaviateSinkConfig.CONFIG_DEF, map);
+        this.maxRetries = config.getRetryMax();
+        this.retryBackoffMs = config.getRetryBackoffMs();
         this.collectionMappingRule = config.getCollectionMapping();
         buildWeaviateClient(config);
         try {
@@ -107,44 +116,88 @@ public class WeaviateSinkTask extends SinkTask {
     @Override
     public void put(Collection<SinkRecord> collection) {
         if (objectsBatcher == null) {
-            objectsBatcher = client.batch().objectsAutoBatcher(
-                    ObjectsBatcher.BatchRetriesConfig.builder()
-                            .maxConnectionRetries(config.getMaxConnectionRetries())
-                            .maxTimeoutRetries(config.getMaxTimeoutRetries())
-                            .retriesIntervalMs(config.getRetryInterval())
-                            .build(),
-                    ObjectsBatcher.AutoBatchConfig.builder()
-                            .batchSize(config.getBatchSize())
-                            .poolSize(config.getPoolSize())
-                            .awaitTerminationMs(config.getAwaitTerminationMs())
-                            .build()
-            );
-            objectsBatcher.withConsistencyLevel(config.getConsistencyLevel().name());
+            initializeObjectsBatcher();
         }
         DataConverter dataConverter = new DataConverter();
         for (SinkRecord record : collection) {
-            if (record.value() == null) {
-                // Skipping tombstone if delete is not enabled
-                if (config.getDeleteEnabled()) {
-                    client.data().deleter()
-                            .withClassName(getCollectionName(record.topic()))
-                            .withID(documentIdStrategy.getDocumentId(record, null))
-                            .withConsistencyLevel(config.getConsistencyLevel().name())
-                            .run();
-                }
-                continue;
+            try {
+                processRecordWithRetries(record, dataConverter);
+            } catch (RetriableException e) {
+                log.error("Retriable exception occurred after max retries for record: {}", record, e);
+                // Throw RetriableException to let Kafka Connect handle retry and DLQ logic
+                throw e;
+            } catch (Exception e) {
+                log.error("Non-retriable exception occurred for record: {}", record, e);
+                // Throw RuntimeException for non-retriable errors so Kafka Connect sends to DLQ
+                throw new RuntimeException("Failed to process record", e);
             }
-            Map<String, Object> properties = dataConverter.convertToWeaviateProperties(record.valueSchema(), record.value());
-            objectsBatcher.withObject(WeaviateObject.builder()
-                    .className(getCollectionName((record.topic())))
-                    .properties(properties)
-                    .id(documentIdStrategy.getDocumentId(record, properties))
-                    .vector(vectorStrategy.getDocumentVector(record, properties))
-                    .build());
         }
         objectsBatcher.flush(); // Flushing to ease error handling
     }
 
+
+    private void processRecordWithRetries(SinkRecord record, DataConverter dataConverter) throws RetriableException {
+        int retries = maxRetries;
+        while (retries > 0) {
+            try {
+                log.info("Processing record: {}. Remaining retries: {}", record, retries);
+                processRecord(record, dataConverter);
+                return; // Exit if successful
+            } catch (RetriableException e) {
+                retries--;
+                log.warn("Retriable exception occurred for record: {}. Attempt {}/{}", record, retries, maxRetries, e);
+                if (retries <= 0) {
+                    log.error("Exhausted retries for record: {}", record);
+                    throw e; // Rethrow if no retries left
+                }
+                try {
+                    Thread.sleep(retryBackoffMs);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Retry backoff interrupted", interruptedException);
+                }
+            }
+        }
+    }
+    private void processRecord(SinkRecord record, DataConverter dataConverter) throws RetriableException {
+        if (record.value() == null) {
+            handleTombstone(record);
+            return;
+        }
+        Map<String, Object> properties = dataConverter.convertToWeaviateProperties(record.valueSchema(), record.value());
+        objectsBatcher.withObject(WeaviateObject.builder()
+                .className(getCollectionName(record.topic()))
+                .properties(properties)
+                .id(documentIdStrategy.getDocumentId(record, properties))
+                .vector(vectorStrategy.getDocumentVector(record, properties))
+                .build());
+    }
+
+    private void handleTombstone(SinkRecord record) {
+        if (config.getDeleteEnabled()) {
+            client.data().deleter()
+                    .withClassName(getCollectionName(record.topic()))
+                    .withID(documentIdStrategy.getDocumentId(record, null))
+                    .withConsistencyLevel(config.getConsistencyLevel().name())
+                    .run();
+        }
+    }
+
+    private void initializeObjectsBatcher() {
+        objectsBatcher = client.batch().objectsAutoBatcher(
+                ObjectsBatcher.BatchRetriesConfig.builder()
+                        .maxConnectionRetries(config.getMaxConnectionRetries())
+                        .maxTimeoutRetries(config.getMaxTimeoutRetries())
+                        .retriesIntervalMs(config.getRetryInterval())
+                        .build(),
+                ObjectsBatcher.AutoBatchConfig.builder()
+                        .batchSize(config.getBatchSize())
+                        .poolSize(config.getPoolSize())
+                        .awaitTerminationMs(config.getAwaitTerminationMs())
+                        .build()
+        );
+        objectsBatcher.withConsistencyLevel(config.getConsistencyLevel().name());
+    }
     public String getCollectionName(String topic) {
         return collectionMappingRule.replace("${topic}", topic);
     }
