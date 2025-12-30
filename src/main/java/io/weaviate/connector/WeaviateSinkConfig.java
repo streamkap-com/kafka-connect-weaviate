@@ -297,15 +297,6 @@ public final class WeaviateSinkConfig extends AbstractConfig {
     public Boolean getDeleteEnabled() {
         return deleteEnabled;
     }
-
-    public Boolean getDlqEnabled() {
-        return dlqEnabled;
-    }
-
-    public String getDlqTopic() {
-        return dlqTopic;
-    }
-
     public Map<String, String> getHeaders() {
         HashMap<String, String> headers = new HashMap<>();
         for (String header : rawHeaders) {
