@@ -129,7 +129,7 @@ public class WeaviateSinkTask extends SinkTask {
 
             List<SinkRecord> updatedRecords;
             if (config.getApplyAutomagicSchemaMaintenanceOnTopOfDbSchema()) {
-                log.info("Applying automagic schema maintenance for collection: {}", collectionId);
+                log.debug("Applying automagic schema maintenance for collection: {}", collectionId);
                 updatedRecords = schemaManager.applyAutomagicSchemaMaintenance(
                         collectionId,
                         records);

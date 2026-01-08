@@ -69,7 +69,6 @@ public class DataConverter {
             } else {
                 schemaType = schema.type();
             }
-            if (schema!=null) log.info("Schema name: {}, type: {}", schema.name(), schema.type());
             switch (schemaType) {
                 case INT8:
                     if (value instanceof Byte) {
