@@ -15,6 +15,7 @@
  */
 package io.weaviate.connector.idstrategy;
 
+import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 import java.nio.charset.StandardCharsets;
@@ -27,10 +28,55 @@ public class KafkaIdStrategy implements IDStrategy {
 
     @Override
     public String getDocumentId(SinkRecord record, Map<String, Object> valueProperties) {
-        if (record.key() instanceof String) {
-            return UUID.nameUUIDFromBytes(record.key().toString().getBytes(StandardCharsets.UTF_8)).toString();
+        Object key = record.key();
+
+        if (key == null) {
+            throw new IllegalArgumentException(
+                    "KafkaIdStrategy requires record key, but key is null. "
+                            + "Topic=" + record.topic()
+            );
         }
 
-        return String.valueOf(record.key());
+        // Convert key to a stable byte representation
+        byte[] keyBytes = serializeKey(key);
+
+        Object id = valueProperties.remove("id");
+        if (id != null) {
+            valueProperties.put(INTERNAL_ID_FIELD, id);
+        }
+        
+        // Deterministic UUID (v5-style)
+        return UUID.nameUUIDFromBytes(keyBytes).toString();
+    }
+
+    private byte[] serializeKey(Object key) {
+        if (key instanceof String) {
+            return ((String) key).getBytes(StandardCharsets.UTF_8);
+        }
+
+        if (key instanceof Number || key instanceof Boolean) {
+            return String.valueOf(key).getBytes(StandardCharsets.UTF_8);
+        }
+
+        if (key instanceof Struct) {
+            return serializeStruct((Struct) key);
+        }
+
+        // Fallback (still deterministic)
+        return key.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private byte[] serializeStruct(Struct struct) {
+        StringBuilder sb = new StringBuilder();
+
+        struct.schema().fields().forEach(field -> {
+            Object value = struct.get(field);
+            sb.append(field.name())
+                    .append('=')
+                    .append(value)
+                    .append('|');
+        });
+
+        return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
 }

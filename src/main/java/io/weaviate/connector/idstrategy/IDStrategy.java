@@ -19,8 +19,11 @@ import io.weaviate.connector.WeaviateSinkConfig;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 import java.util.Map;
+import java.util.Set;
 
 public interface IDStrategy {
+    public static final String INTERNAL_ID_FIELD = "__id";
+    static final Set<String> RESERVED_IDS = Set.of("id", "_id");
     public String getDocumentId(SinkRecord record, Map<String, Object> valueProperties);
 
     public default void configure(WeaviateSinkConfig config) {

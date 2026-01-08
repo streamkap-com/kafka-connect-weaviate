@@ -22,6 +22,10 @@ import java.util.Map;
 public class NoIdStrategy implements IDStrategy {
     @Override
     public String getDocumentId(SinkRecord record, Map<String, Object> valueProperties) {
+        Object id = valueProperties.remove("id");
+        if (id != null) {
+            valueProperties.put(INTERNAL_ID_FIELD, id);
+        }
         return null;
     }
 }

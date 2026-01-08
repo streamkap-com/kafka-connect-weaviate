@@ -15,6 +15,7 @@
  */
 package io.weaviate.connector;
 
+import io.debezium.config.EnumeratedValue;
 import io.weaviate.connector.idstrategy.IDStrategy;
 import io.weaviate.connector.idstrategy.KafkaIdStrategy;
 import io.weaviate.connector.vectorstrategy.VectorStrategy;
@@ -54,6 +55,8 @@ public final class WeaviateSinkConfig extends AbstractConfig {
     private final Integer batchSize;
     private final Integer poolSize;
     private final Boolean deleteEnabled;
+    private final boolean applyAutomagicSchemaMaintenanceOnTopOfDbSchema;
+    public final SchemaEvolutionMode schemaEvolutionMode;
 
     public enum AuthMechanism {
         NONE,
@@ -151,6 +154,14 @@ public final class WeaviateSinkConfig extends AbstractConfig {
     private static final String DELETE_ENABLED_DOC = "Whether to treat null record values as deletes";
     private static final boolean DELETE_ENABLED_DEFAULT = false;
 
+    private static final String APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA = "apply.automagic.schema.maintenance.on.top.of.db.schema";
+    private static final String APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA_DOC = "Apply automagic schema maintenance, on top of KC schema derived from the destination DB";
+    private static final boolean APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA_DEFAULT = false;
+
+    private static final String SCHEMA_EVOLUTION = "schema.evolution";
+    private static final String SCHEMA_EVOLUTION_DOC = "Controls how schema evolution is handled by the sink connector.";
+    private static final String SCHEMA_EVOLUTION_DEFAULT = SchemaEvolutionMode.BASIC.getValue();
+
     public static ConfigDef CONFIG_DEF = new ConfigDef()
             .define(CONNECTION_URL_CONFIG, ConfigDef.Type.STRING, CONNECTION_URL_DEFAULT, ConfigDef.Importance.HIGH, CONNECTION_URL_DOC)
             .define(GRPC_URL_CONFIG, ConfigDef.Type.STRING, GRPC_URL_DEFAULT, ConfigDef.Importance.HIGH, GRPC_URL_DOC)
@@ -174,7 +185,9 @@ public final class WeaviateSinkConfig extends AbstractConfig {
             .define(BATCH_SIZE_CONFIG, ConfigDef.Type.INT, BATCH_SIZE_DEFAULT, ConfigDef.Importance.LOW, BATCH_SIZE_DOC)
             .define(POOL_SIZE_CONFIG, ConfigDef.Type.INT, POOL_SIZE_DEFAULT, ConfigDef.Importance.LOW, POOL_SIZE_DOC)
             .define(AWAIT_TERMINATION_MS_CONFIG, ConfigDef.Type.INT, AWAIT_TERMINATION_MS_DEFAULT, ConfigDef.Importance.LOW, AWAIT_TERMINATION_MS_DOC)
-            .define(DELETE_ENABLED_CONFIG, ConfigDef.Type.BOOLEAN, DELETE_ENABLED_DEFAULT, ConfigDef.Importance.LOW, DELETE_ENABLED_DOC);
+            .define(DELETE_ENABLED_CONFIG, ConfigDef.Type.BOOLEAN, DELETE_ENABLED_DEFAULT, ConfigDef.Importance.LOW, DELETE_ENABLED_DOC)
+            .define(APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA, ConfigDef.Type.BOOLEAN, APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA_DEFAULT, ConfigDef.Importance.LOW, APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA_DOC)
+            .define(SCHEMA_EVOLUTION, ConfigDef.Type.STRING, SCHEMA_EVOLUTION_DEFAULT, ConfigDef.ValidString.in(SchemaEvolutionMode.NONE.getValue(), SchemaEvolutionMode.BASIC.getValue()), ConfigDef.Importance.MEDIUM, SCHEMA_EVOLUTION_DOC);
 
     public WeaviateSinkConfig(ConfigDef definition, Map<?, ?> originals) {
         super(CONFIG_DEF, originals);
@@ -201,6 +214,8 @@ public final class WeaviateSinkConfig extends AbstractConfig {
         poolSize = getInt(POOL_SIZE_CONFIG);
         awaitTerminationMs = getInt(AWAIT_TERMINATION_MS_CONFIG);
         deleteEnabled = getBoolean(DELETE_ENABLED_CONFIG);
+        schemaEvolutionMode = SchemaEvolutionMode.parse(getString(SCHEMA_EVOLUTION));
+        applyAutomagicSchemaMaintenanceOnTopOfDbSchema = getBoolean(APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA);
         if (deleteEnabled && (!documentIdStrategy.equals(KafkaIdStrategy.class))) {
             throw new IllegalArgumentException("If delete.enabled is true, document.id.strategy should be set to KafkaIdStrategy");
         }
@@ -297,6 +312,15 @@ public final class WeaviateSinkConfig extends AbstractConfig {
     public Boolean getDeleteEnabled() {
         return deleteEnabled;
     }
+
+    public boolean getApplyAutomagicSchemaMaintenanceOnTopOfDbSchema() {
+        return applyAutomagicSchemaMaintenanceOnTopOfDbSchema;
+    }
+
+    public SchemaEvolutionMode getSchemaEvolutionMode() {
+        return schemaEvolutionMode;
+    }
+
     public Map<String, String> getHeaders() {
         HashMap<String, String> headers = new HashMap<>();
         for (String header : rawHeaders) {
@@ -363,4 +387,44 @@ public final class WeaviateSinkConfig extends AbstractConfig {
         QUORUM,
     }
 
+    public enum SchemaEvolutionMode  implements EnumeratedValue {
+        /**
+         * No schema evolution occurs, assumed that the destination table's structure matches the event.
+         */
+        NONE("none"),
+
+        /**
+         * When an event is received, the table will be created if it does not exist, and any new fields
+         * found in the event will be amended to the existing tables.  Any columns omitted from the event
+         * will simply be skipped during inserts and updates.
+         */
+        BASIC("basic");
+
+        // /**
+        // * When an event is received, the table will be created if it does not exist, and any new fields
+        // * found in the event will be added to the existing table's schema. Any columns from the table
+        // * schema not found in the event will be dropped.
+        // */
+        // ADVANCED("advanced");
+        private final String mode;
+
+        SchemaEvolutionMode(String mode) {
+            this.mode = mode;
+        }
+
+        public static SchemaEvolutionMode parse(String value) {
+            for (SchemaEvolutionMode option : SchemaEvolutionMode.values()) {
+                if (option.getValue().equalsIgnoreCase(value)) {
+                    return option;
+                }
+            }
+            return SchemaEvolutionMode.NONE;
+        }
+
+        @Override
+        public String getValue() {
+            return mode;
+        }
+
+    }
 }

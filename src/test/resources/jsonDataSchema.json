@@ -21,6 +21,13 @@
         "type": "double",
         "optional": false,
         "field": "float"
+      },
+      {
+        "field": "date",
+        "type": "string",
+        "optional": false,
+        "name": "io.debezium.time.ZonedTimestamp",
+        "version": 1
       }
     ]
   },
@@ -28,7 +35,7 @@
     "text": "hello world",
     "int": 123,
     "float": 1.23,
-    "date": "1736352917",
+    "date": "2026-12-08T15:21:57Z",
     "boolean": true,
     "bytes": "SGVsbG8gV29ybGQK"
   }

@@ -15,13 +15,12 @@
  */
 package io.weaviate.connector;
 
+import com.streamkap.common.util.AutoMagicSchemaMaintenance;
 import io.grpc.NameResolverRegistry;
-import io.weaviate.client.Config;
-import io.weaviate.client.WeaviateAuthClient;
 import io.weaviate.client.WeaviateClient;
-import io.weaviate.client.v1.auth.exception.AuthException;
 import io.weaviate.client.v1.batch.api.ObjectsBatcher;
-import io.weaviate.client.v1.data.model.WeaviateObject;
+import io.weaviate.client.v1.batch.api.ObjectsBatcher.AutoBatchConfig;
+import io.weaviate.client.v1.batch.model.ObjectGetResponse;
 import io.weaviate.connector.converter.DataConverter;
 import io.weaviate.connector.idstrategy.IDStrategy;
 import io.weaviate.connector.vectorstrategy.VectorStrategy;
@@ -34,19 +33,24 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class WeaviateSinkTask extends SinkTask {
     private static final Logger log = LoggerFactory.getLogger(WeaviateSinkTask.class);
-    WeaviateClient client;
-    private String collectionMappingRule;
+
+    private WeaviateClient client;
+    private WeaviateSinkConfig config;
+    private ObjectsBatcher objectsBatcher;
+
     private IDStrategy documentIdStrategy;
     private VectorStrategy vectorStrategy;
-    private ObjectsBatcher objectsBatcher;
-    private WeaviateSinkConfig config;
+    private String collectionMappingRule;
 
-    private int maxRetries;
-    private long retryBackoffMs;
+    private WeaviateSchemaManager schemaManager;
+    private RecordProcessor recordProcessor;
+    AutoMagicSchemaMaintenance autoMagicSchemaMaintenance;
 
     @Override
     public String version() {
@@ -56,10 +60,19 @@ public class WeaviateSinkTask extends SinkTask {
     @Override
     public void start(Map<String, String> map) {
         this.config = new WeaviateSinkConfig(WeaviateSinkConfig.CONFIG_DEF, map);
-        this.maxRetries = config.getRetryMax();
-        this.retryBackoffMs = config.getRetryBackoffMs();
         this.collectionMappingRule = config.getCollectionMapping();
-        buildWeaviateClient(config);
+
+        autoMagicSchemaMaintenance = new AutoMagicSchemaMaintenance(
+                !config.schemaEvolutionMode.equals(WeaviateSinkConfig.SchemaEvolutionMode.NONE),
+                !config.schemaEvolutionMode.equals(WeaviateSinkConfig.SchemaEvolutionMode.NONE));
+
+        // Build Weaviate client using builder
+        this.client = WeaviateClientBuilder.buildClient(config);
+
+        // Initialize schema manager
+        this.schemaManager = new WeaviateSchemaManager(client, config, autoMagicSchemaMaintenance);
+
+        // Initialize ID and vector strategies
         try {
             this.documentIdStrategy = (IDStrategy) config.getDocumentIdStrategy().getDeclaredConstructor().newInstance();
             this.documentIdStrategy.configure(config);
@@ -80,108 +93,72 @@ public class WeaviateSinkTask extends SinkTask {
         defaultRegistry.getDefaultScheme();
     }
 
-    private void buildWeaviateClient(WeaviateSinkConfig config) {
-        Config weaviateConfig = getConfig(config);
-        if (config.getAuthMechanism() == WeaviateSinkConfig.AuthMechanism.NONE) {
-            client = new WeaviateClient(weaviateConfig);
-        } else if (config.getAuthMechanism() == WeaviateSinkConfig.AuthMechanism.API_KEY) {
-            try {
-                client = WeaviateAuthClient.apiKey(weaviateConfig, config.getApiKey());
-            } catch (AuthException e) {
-                throw new RuntimeException(e);
-            }
-        } else if (config.getAuthMechanism() == WeaviateSinkConfig.AuthMechanism.OIDC_CLIENT_CREDENTIALS) {
-            try {
-                client = WeaviateAuthClient.clientCredentials(weaviateConfig, config.getOidcClientSecret(), config.getOidcScopes());
-            } catch (AuthException e) {
-                throw new RuntimeException(e);
-            }
-        } else {
-            throw new RuntimeException("Unknown authentication mechanism");
-        }
-    }
-
-    private static Config getConfig(WeaviateSinkConfig config) {
-        String scheme = config.getConnectionUrl().split("://")[0];
-        String hostAndPort = config.getConnectionUrl().split("://")[1];
-        Map<String, String> headers = config.getHeaders();
-        Config weaviateConfig = new Config(scheme, hostAndPort, headers);
-        if (config.getGrpcUrl() != null && !config.getGrpcUrl().isEmpty()) {
-            weaviateConfig.setGRPCHost(config.getGrpcUrl());
-            weaviateConfig.setGRPCSecured(config.getGrpcSecured());
-        }
-        return weaviateConfig;
-    }
 
     @Override
     public void put(Collection<SinkRecord> collection) {
         if (objectsBatcher == null) {
             initializeObjectsBatcher();
+            // Initialize record processor after objectsBatcher is ready
+            recordProcessor = new RecordProcessor(
+                    client,
+                    objectsBatcher,
+                    config,
+                    documentIdStrategy,
+                    vectorStrategy,
+                    collectionMappingRule,
+                    config.getRetryMax(),
+                    config.getRetryBackoffMs()
+            );
         }
-        DataConverter dataConverter = new DataConverter();
+
+        final Map<String, List<SinkRecord>> recordsByCollection = new HashMap<>();
         for (SinkRecord record : collection) {
-            try {
-                processRecordWithRetries(record, dataConverter);
-            } catch (RetriableException e) {
-                log.error("Retriable exception occurred after max retries for record: {}", record, e);
-                // Throw RetriableException to let Kafka Connect handle retry and DLQ logic
-                throw e;
-            } catch (Exception e) {
-                log.error("Non-retriable exception occurred for record: {}", record, e);
-                // Throw RuntimeException for non-retriable errors so Kafka Connect sends to DLQ
-                throw new RuntimeException("Failed to process record", e);
-            }
+            final String collectionId = recordProcessor.getCollectionName(record.topic());
+            recordsByCollection.computeIfAbsent(collectionId, k -> new java.util.ArrayList<>())
+                    .add(record);
         }
-        objectsBatcher.flush(); // Flushing to ease error handling
-    }
 
+        // Process all records with retry logic
+        DataConverter dataConverter = new DataConverter();
 
-    private void processRecordWithRetries(SinkRecord record, DataConverter dataConverter) throws RetriableException {
-        int retries = maxRetries;
-        while (retries > 0) {
-            try {
-                log.info("Processing record: {}. Remaining retries: {}", record, retries);
-                processRecord(record, dataConverter);
-                return; // Exit if successful
-            } catch (RetriableException e) {
-                retries--;
-                log.warn("Retriable exception occurred for record: {}. Attempt {}/{}", record, retries, maxRetries, e);
-                if (retries <= 0) {
-                    log.error("Exhausted retries for record: {}", record);
-                    throw e; // Rethrow if no retries left
-                }
+        for (Map.Entry<String, List<SinkRecord>> entry : recordsByCollection.entrySet()) {
+            // Validate collections exist
+            String collectionId = entry.getKey();
+            List<SinkRecord> records = entry.getValue();
+            schemaManager.validateAndCreateCollectionIfNeeded(collectionId);
+
+            List<SinkRecord> updatedRecords;
+            if (config.getApplyAutomagicSchemaMaintenanceOnTopOfDbSchema()) {
+                log.info("Applying automagic schema maintenance for collection: {}", collectionId);
+                updatedRecords = schemaManager.applyAutomagicSchemaMaintenance(
+                        collectionId,
+                        records);
+            } else {
+                updatedRecords = records;
+            }
+
+            for (SinkRecord record : updatedRecords) {
                 try {
-                    Thread.sleep(retryBackoffMs);
-                } catch (InterruptedException interruptedException) {
-                    Thread.currentThread().interrupt();
-                    throw new RuntimeException("Retry backoff interrupted", interruptedException);
+                    recordProcessor.processRecordWithRetries(record, dataConverter);
+                } catch (RetriableException e) {
+                    log.error("Retriable exception occurred after max retries for record: {}", record, e);
+                    throw e;
+                } catch (Exception e) {
+                    log.error("Non-retriable exception occurred for record: {}", record, e);
+                    throw new RuntimeException("Failed to process record", e);
                 }
+            }
+
+            log.info("Flushing records: {}", collection.size());
+            try {
+                objectsBatcher.flush();
+            } catch (Exception e) {
+                log.error("Flush failed - collection may not exist or be inaccessible", e);
+                throw new RuntimeException("Batch flush failed", e);
             }
         }
     }
-    private void processRecord(SinkRecord record, DataConverter dataConverter) throws RetriableException {
-        if (record.value() == null) {
-            handleTombstone(record);
-            return;
-        }
-        Map<String, Object> properties = dataConverter.convertToWeaviateProperties(record.valueSchema(), record.value());
-        objectsBatcher.withObject(WeaviateObject.builder()
-                .className(getCollectionName(record.topic()))
-                .properties(properties)
-                .id(documentIdStrategy.getDocumentId(record, properties))
-                .vector(vectorStrategy.getDocumentVector(record, properties))
-                .build());
-    }
 
-    private void handleTombstone(SinkRecord record) {
-        if (config.getDeleteEnabled()) {
-            client.data().deleter()
-                    .withClassName(getCollectionName(record.topic()))
-                    .withID(documentIdStrategy.getDocumentId(record, null))
-                    .withConsistencyLevel(config.getConsistencyLevel().name())
-                    .run();
-        }
-    }
 
     private void initializeObjectsBatcher() {
         objectsBatcher = client.batch().objectsAutoBatcher(
@@ -194,12 +171,40 @@ public class WeaviateSinkTask extends SinkTask {
                         .batchSize(config.getBatchSize())
                         .poolSize(config.getPoolSize())
                         .awaitTerminationMs(config.getAwaitTerminationMs())
+                        .callback(result -> {
+                            try {
+                                if (result == null) {
+                                    throw new RuntimeException("Weaviate batch result is null");
+                                }
+
+                                if (result.hasErrors()) {
+                                    throw new RuntimeException(
+                                            "Weaviate batch ingestion failed: "
+                                                    + result.getError().getMessages()
+                                    );
+                                }
+
+                                ObjectGetResponse[] responses = result.getResult();
+                                if (responses != null) {
+                                    for (ObjectGetResponse r : responses) {
+                                        if (r.getResult() != null &&
+                                                "FAILED".equalsIgnoreCase(r.getResult().getStatus())) {
+
+                                            throw new RuntimeException(
+                                                    "Weaviate object failed: id=" + r.getId()
+                                                            + ", errors=" + r.getResult().getErrors().getError()
+                                            );
+                                        }
+                                    }
+                                }
+                            } catch (Exception e) {
+                                // Ensure Connect sees this as fatal
+                                throw new RuntimeException("Weaviate batch callback failed", e);
+                            }
+                        })
                         .build()
         );
         objectsBatcher.withConsistencyLevel(config.getConsistencyLevel().name());
-    }
-    public String getCollectionName(String topic) {
-        return collectionMappingRule.replace("${topic}", topic);
     }
 
     @Override

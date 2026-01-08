@@ -73,6 +73,25 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Debezium -->
+        <dependency>
+            <groupId>io.debezium</groupId>
+            <artifactId>debezium-core</artifactId>
+            <version>2.7.1.Final</version>
+        </dependency>
+        <!-- Streamkap -->
+        <dependency>
+            <groupId>com.streamkap</groupId>
+            <artifactId>streamkap-kafka-connect-utilities</artifactId>
+            <version>0.0.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.streamkap</groupId>
+            <artifactId>streamkap-kafka-connect-utilities</artifactId>
+            <version>0.0.1</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

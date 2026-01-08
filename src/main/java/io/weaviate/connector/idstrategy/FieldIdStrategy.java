@@ -37,7 +37,12 @@ public class FieldIdStrategy implements IDStrategy {
     public String getDocumentId(SinkRecord record, Map<String, Object> valueProperties) {
         try {
             String id = String.valueOf(valueProperties.get(fieldName));
-            valueProperties.remove(fieldName);
+            if (RESERVED_IDS.contains(fieldName.toLowerCase())) {
+                Object fieldValue = valueProperties.remove(fieldName);
+                if (fieldValue != null) {
+                    valueProperties.put(INTERNAL_ID_FIELD, fieldValue);
+                }
+            }
             return UUID.nameUUIDFromBytes(id.getBytes(StandardCharsets.UTF_8)).toString();
         } catch (Exception e) {
             throw new RuntimeException("Cannot get document id from message", e);
