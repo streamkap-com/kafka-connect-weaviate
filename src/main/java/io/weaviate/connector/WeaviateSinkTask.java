@@ -111,6 +111,10 @@ public class WeaviateSinkTask extends SinkTask {
             );
         }
 
+        if(collection.size()>0) {
+            log.info("Received {} record", collection.size());
+        }
+
         final Map<String, List<SinkRecord>> recordsByCollection = new HashMap<>();
         for (SinkRecord record : collection) {
             final String collectionId = recordProcessor.getCollectionName(record.topic());
@@ -137,6 +141,7 @@ public class WeaviateSinkTask extends SinkTask {
                 updatedRecords = records;
             }
 
+            log.info("Processing records:{} for collection: {}", updatedRecords.size(), collectionId);
             for (SinkRecord record : updatedRecords) {
                 try {
                     recordProcessor.processRecordWithRetries(record, dataConverter);
@@ -148,14 +153,14 @@ public class WeaviateSinkTask extends SinkTask {
                     throw new RuntimeException("Failed to process record", e);
                 }
             }
+        }
 
-            log.info("Flushing records: {}", collection.size());
-            try {
-                objectsBatcher.flush();
-            } catch (Exception e) {
-                log.error("Flush failed - collection may not exist or be inaccessible", e);
-                throw new RuntimeException("Batch flush failed", e);
-            }
+        log.info("Flushing records: {}", collection.size());
+        try {
+            objectsBatcher.flush();
+        } catch (Exception e) {
+            log.error("Flush failed - collection may not exist or be inaccessible", e);
+            throw new RuntimeException("Batch flush failed", e);
         }
     }
 

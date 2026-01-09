@@ -115,7 +115,7 @@ public class RecordProcessor {
 
         Map<String, Object> properties = dataConverter.convertToWeaviateProperties(record.valueSchema(), record.value());
         String collectionName = getCollectionName(record.topic());
-        log.info("Processing record for collection: {} with properties: {}", collectionName, properties);
+        log.debug("Processing record for collection: {} with properties: {}", collectionName, properties);
 
         objectsBatcher.withObject(WeaviateObject.builder()
                 .className(collectionName)
