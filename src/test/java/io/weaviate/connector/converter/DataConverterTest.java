@@ -15,15 +15,24 @@
  */
 package io.weaviate.connector.converter;
 
+import com.streamkap.common.util.AutoMagicSchemaMaintenance;
+import io.weaviate.connector.WeaviateSinkConfig;
+import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaAndValue;
+import org.apache.kafka.connect.data.SchemaBuilder;
+import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.json.JsonConverterConfig;
+import org.apache.kafka.connect.sink.SinkRecord;
 import org.codehaus.plexus.util.IOUtil;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -70,5 +79,54 @@ class DataConverterTest {
         assertEquals(123L, properties.get("int"));
         assertEquals(1.23, properties.get("float"));
         assertEquals(true, properties.get("boolean"));
+    }
+
+    @Test
+    void structWithSchemaConvertToWeaviateProperties_int8Repro() {
+        DataConverter converter = new DataConverter();
+
+        // 1. Build a realistic Connect schema
+        Schema valueSchema = SchemaBuilder.struct()
+                .name("test.Value")
+                .field("tinyint_col", Schema.OPTIONAL_INT8_SCHEMA)
+                .field("int_col", Schema.OPTIONAL_INT32_SCHEMA)
+                .field("float_col", Schema.OPTIONAL_FLOAT64_SCHEMA)
+                .field("bool_col", Schema.OPTIONAL_BOOLEAN_SCHEMA)
+                .build();
+
+        // 2. Populate Struct with real Java types
+        Struct struct = new Struct(valueSchema)
+                .put("tinyint_col", (byte) 1)   // <- THIS is the problematic field
+                .put("int_col", 123)
+                .put("float_col", 1.23d)
+                .put("bool_col", true);
+
+        // 3. Create a proper SinkRecord
+        SinkRecord sinkRecord = new SinkRecord(
+                "test-topic",   // topic (important for automagic)
+                0,              // partition
+                null,            // key schema
+                null,            // key
+                valueSchema,     // value schema
+                struct,          // value
+                0L               // offset
+        );
+
+        AutoMagicSchemaMaintenance autoMagicSchemaMaintenance = new AutoMagicSchemaMaintenance(
+                true,
+                true);
+        SinkRecord updatedRecord = autoMagicSchemaMaintenance.normalizeRecordsOptInferSchema((Collections.singleton(sinkRecord))).get(0);
+        // 4. Convert using the same entry point as the sink
+        Map<String, Object> properties =
+                converter.convertToWeaviateProperties(
+                        updatedRecord.valueSchema(),
+                        updatedRecord.value()
+                );
+
+        // 5. Assertions
+        assertEquals(1L, properties.get("tinyint_col"));  // expect DOUBLE
+        assertEquals(123L, properties.get("int_col"));
+        assertEquals(1.23d, properties.get("float_col"));
+        assertEquals(true, properties.get("bool_col"));
     }
 }

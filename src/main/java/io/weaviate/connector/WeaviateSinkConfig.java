@@ -15,7 +15,6 @@
  */
 package io.weaviate.connector;
 
-import io.debezium.config.EnumeratedValue;
 import io.weaviate.connector.idstrategy.IDStrategy;
 import io.weaviate.connector.idstrategy.KafkaIdStrategy;
 import io.weaviate.connector.vectorstrategy.VectorStrategy;
@@ -57,6 +56,7 @@ public final class WeaviateSinkConfig extends AbstractConfig {
     private final Boolean deleteEnabled;
     private final boolean applyAutomagicSchemaMaintenanceOnTopOfDbSchema;
     public final SchemaEvolutionMode schemaEvolutionMode;
+    public final WeaviateVectorizer weaviateVectorizer;
 
     public enum AuthMechanism {
         NONE,
@@ -162,6 +162,13 @@ public final class WeaviateSinkConfig extends AbstractConfig {
     private static final String SCHEMA_EVOLUTION_DOC = "Controls how schema evolution is handled by the sink connector.";
     private static final String SCHEMA_EVOLUTION_DEFAULT = SchemaEvolutionMode.BASIC.getValue();
 
+    private static final String WEAVIATE_VECTORIZER = "weaviate.vectorizer";
+    private static final String WEAVIATE_VECTORIZER_DOC = "Sets the default Weaviate vectorizer to use for objects without explicit vector data. Applies to new collections only.";
+    private static final String WEAVIATE_VECTORIZER_DEFAULT = WeaviateVectorizer.TEXT2VEC_WEAVIATE.getValue();
+    private static final String[] validVectorizers = Arrays.stream(WeaviateVectorizer.values())
+            .map(WeaviateVectorizer::getValue)
+            .toArray(String[]::new);
+
     public static ConfigDef CONFIG_DEF = new ConfigDef()
             .define(CONNECTION_URL_CONFIG, ConfigDef.Type.STRING, CONNECTION_URL_DEFAULT, ConfigDef.Importance.HIGH, CONNECTION_URL_DOC)
             .define(GRPC_URL_CONFIG, ConfigDef.Type.STRING, GRPC_URL_DEFAULT, ConfigDef.Importance.HIGH, GRPC_URL_DOC)
@@ -187,7 +194,8 @@ public final class WeaviateSinkConfig extends AbstractConfig {
             .define(AWAIT_TERMINATION_MS_CONFIG, ConfigDef.Type.INT, AWAIT_TERMINATION_MS_DEFAULT, ConfigDef.Importance.LOW, AWAIT_TERMINATION_MS_DOC)
             .define(DELETE_ENABLED_CONFIG, ConfigDef.Type.BOOLEAN, DELETE_ENABLED_DEFAULT, ConfigDef.Importance.LOW, DELETE_ENABLED_DOC)
             .define(APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA, ConfigDef.Type.BOOLEAN, APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA_DEFAULT, ConfigDef.Importance.LOW, APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA_DOC)
-            .define(SCHEMA_EVOLUTION, ConfigDef.Type.STRING, SCHEMA_EVOLUTION_DEFAULT, ConfigDef.ValidString.in(SchemaEvolutionMode.NONE.getValue(), SchemaEvolutionMode.BASIC.getValue()), ConfigDef.Importance.MEDIUM, SCHEMA_EVOLUTION_DOC);
+            .define(SCHEMA_EVOLUTION, ConfigDef.Type.STRING, SCHEMA_EVOLUTION_DEFAULT, ConfigDef.ValidString.in(SchemaEvolutionMode.NONE.getValue(), SchemaEvolutionMode.BASIC.getValue()), ConfigDef.Importance.MEDIUM, SCHEMA_EVOLUTION_DOC)
+            .define(WEAVIATE_VECTORIZER, ConfigDef.Type.STRING, WEAVIATE_VECTORIZER_DEFAULT, ConfigDef.ValidString.in(validVectorizers), ConfigDef.Importance.LOW, WEAVIATE_VECTORIZER_DOC);
 
     public WeaviateSinkConfig(ConfigDef definition, Map<?, ?> originals) {
         super(CONFIG_DEF, originals);
@@ -215,6 +223,7 @@ public final class WeaviateSinkConfig extends AbstractConfig {
         awaitTerminationMs = getInt(AWAIT_TERMINATION_MS_CONFIG);
         deleteEnabled = getBoolean(DELETE_ENABLED_CONFIG);
         schemaEvolutionMode = SchemaEvolutionMode.parse(getString(SCHEMA_EVOLUTION));
+        weaviateVectorizer = WeaviateVectorizer.parse(getString(WEAVIATE_VECTORIZER));
         applyAutomagicSchemaMaintenanceOnTopOfDbSchema = getBoolean(APPLY_AUTOMAGIC_SCHEMA_MAINTENANCE_ON_TOP_OF_DB_SCHEMA);
         if (deleteEnabled && (!documentIdStrategy.equals(KafkaIdStrategy.class))) {
             throw new IllegalArgumentException("If delete.enabled is true, document.id.strategy should be set to KafkaIdStrategy");
@@ -321,6 +330,10 @@ public final class WeaviateSinkConfig extends AbstractConfig {
         return schemaEvolutionMode;
     }
 
+    public WeaviateVectorizer getWeaviateVectorizer() {
+        return weaviateVectorizer;
+    }
+
     public Map<String, String> getHeaders() {
         HashMap<String, String> headers = new HashMap<>();
         for (String header : rawHeaders) {
@@ -387,7 +400,7 @@ public final class WeaviateSinkConfig extends AbstractConfig {
         QUORUM,
     }
 
-    public enum SchemaEvolutionMode  implements EnumeratedValue {
+    public enum SchemaEvolutionMode {
         /**
          * No schema evolution occurs, assumed that the destination table's structure matches the event.
          */
@@ -421,10 +434,74 @@ public final class WeaviateSinkConfig extends AbstractConfig {
             return SchemaEvolutionMode.NONE;
         }
 
-        @Override
         public String getValue() {
             return mode;
         }
 
     }
+
+    public enum WeaviateVectorizer {
+
+        // --------------------
+        // No vectorizer
+        // --------------------
+        NONE("none"),
+
+        // --------------------
+        // Text vectorizers
+        // --------------------
+        TEXT2VEC_WEAVIATE("text2vec-weaviate"),
+        TEXT2VEC_OPENAI("text2vec-openai"),
+        TEXT2VEC_COHERE("text2vec-cohere"),
+        TEXT2VEC_GOOGLE("text2vec-google"),
+        TEXT2VEC_GOOGLE_AISTUDIO("text2vec-google-aistudio"),
+        TEXT2VEC_HUGGINGFACE("text2vec-huggingface"),
+        TEXT2VEC_JINAAI("text2vec-jinaai"),
+        TEXT2VEC_MISTRAL("text2vec-mistral"),
+        TEXT2VEC_MORPH("text2vec-morph"),
+        TEXT2VEC_NVIDIA("text2vec-nvidia"),
+        TEXT2VEC_VOYAGEAI("text2vec-voyageai"),
+        TEXT2VEC_DATABRICKS("text2vec-databricks"),
+        TEXT2VEC_AWS("text2vec-aws"),
+        TEXT2VEC_OLLAMA("text2vec-ollama"),
+        TEXT2VEC_OCTOAI("text2vec-octoai"), // deprecated but still visible in UI
+
+        // --------------------
+        // Multi-modal vectorizers
+        // --------------------
+        MULTI2VEC_AWS("multi2vec-aws"),
+        MULTI2VEC_COHERE("multi2vec-cohere"),
+        MULTI2VEC_GOOGLE("multi2vec-google"),
+        MULTI2VEC_JINAAI("multi2vec-jinaai"),
+        MULTI2VEC_NVIDIA("multi2vec-nvidia"),
+        MULTI2VEC_VOYAGEAI("multi2vec-voyageai"),
+
+        // --------------------
+        // Reference-based vectorizer
+        // --------------------
+        REF2VEC_CENTROID("ref2vec-centroid");
+
+        private final String value;
+
+        WeaviateVectorizer(String value) {
+            this.value = value;
+        }
+
+        public String getValue() {
+            return value;
+        }
+
+        public static WeaviateVectorizer parse(String value) {
+            if (value == null) {
+                return NONE;
+            }
+            for (WeaviateVectorizer option : values()) {
+                if (option.value.equalsIgnoreCase(value)) {
+                    return option;
+                }
+            }
+            return NONE;
+        }
+    }
+
 }
