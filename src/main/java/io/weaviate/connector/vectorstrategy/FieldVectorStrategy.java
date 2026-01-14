@@ -40,27 +40,52 @@ public class FieldVectorStrategy implements VectorStrategy {
         }
 
         Object object = valueProperties.get(fieldName);
+
+        // Case 1: Already Float[]
         if (object instanceof Float[]) {
             valueProperties.remove(fieldName);
             return (Float[]) object;
         }
+
+        // Case 2: Iterable of numbers
         if (object instanceof Iterable) {
+            Iterable<?> iterable = (Iterable<?>) object;
             List<Float> floatList = new ArrayList<>();
-            for (Object o : (Iterable<?>) object) {
+            for (Object o : iterable) {
                 if (o instanceof Float) {
-                    Float f = (Float) o;
-                    floatList.add(f);
+                    floatList.add((Float) o);
                 } else if (o instanceof Double) {
-                    Double d = (Double) o;
-                    floatList.add(d.floatValue());
-                } else { // trying to cast anyway
-                    Float f = (Float) o;
-                    floatList.add(f);
+                    floatList.add(((Double) o).floatValue());
+                } else if (o instanceof Number) {
+                    floatList.add(((Number) o).floatValue());
+                } else {
+                    throw new UnsupportedOperationException("Can't convert element " + o + " to Float");
                 }
             }
             valueProperties.remove(fieldName);
             return floatList.toArray(new Float[0]);
         }
+
+        // Case 3: JSON string "[0.1, 0.2, 0.3]"
+        if (object instanceof String) {
+            String str = ((String) object).trim();
+            if (str.startsWith("[") && str.endsWith("]")) {
+                str = str.substring(1, str.length() - 1); // remove brackets
+                String[] parts = str.split(",");
+                List<Float> floatList = new ArrayList<>();
+                for (String part : parts) {
+                    try {
+                        floatList.add(Float.parseFloat(part.trim()));
+                    } catch (NumberFormatException e) {
+                        throw new UnsupportedOperationException("Can't convert '" + part + "' to Float", e);
+                    }
+                }
+                valueProperties.remove(fieldName);
+                return floatList.toArray(new Float[0]);
+            }
+        }
+
         throw new UnsupportedOperationException("Can't convert " + object + " to Float[]");
     }
+
 }
