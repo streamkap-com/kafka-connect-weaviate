@@ -111,7 +111,6 @@ public class WeaviateSchemaManager {
 
     /**
      * Creates a new Weaviate collection with default configuration.
-     * Uses text2vec-weaviate vectorizer with Snowflake Arctic Embed model.
      *
      * @param collectionName the name of the collection to create
      * @throws RuntimeException if collection creation fails
@@ -141,27 +140,10 @@ public class WeaviateSchemaManager {
         return WeaviateClass.builder()
                 .className(collectionName)
                 .description("Auto-created collection from Streamkap for topic: " + collectionName)
-                .vectorizer("text2vec-weaviate")
-                .vectorIndexType("hnsw")
-                .vectorIndexConfig(VectorIndexConfig.builder().distance("cosine").build())
-                .invertedIndexConfig(InvertedIndexConfig.builder().build())
-                .moduleConfig(Map.of(
-                        "text2vec-weaviate", Map.of(
-                                "model", "Snowflake/snowflake-arctic-embed-l-v2.0",
-                                "dimensions", 1024,
-                                "vectorizeClassName", false
-                        )
-                ))
-                .properties(List.of(
-                        Property.builder()
-                                .name("")  // Dummy property like UI
-                                .description("")
-                                .dataType(List.of("string"))
-                                .indexFilterable(true)
-                                .build()
-                ))
+                .vectorizer(config.getWeaviateVectorizer().getValue())
                 .build();
     }
+
 
     public List<SinkRecord> applyAutomagicSchemaMaintenance(String collectionId, List<SinkRecord> records) {
 
