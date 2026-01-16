@@ -15,6 +15,7 @@
  */
 package io.weaviate.connector;
 
+import com.streamkap.common.util.RecordUtils;
 import io.weaviate.client.WeaviateClient;
 import io.weaviate.client.v1.batch.api.ObjectsBatcher;
 import io.weaviate.client.v1.data.model.WeaviateObject;
@@ -111,6 +112,9 @@ public class RecordProcessor {
         if (record.value() == null) {
             handleTombstone(record);
             return;
+        } else if (config.getDeleteEnabled() && isDeleteOperation(record)) {
+            handleTombstone(record);
+            return;
         }
 
         Map<String, Object> properties = dataConverter.convertToWeaviateProperties(record.valueSchema(), record.value());
@@ -123,6 +127,12 @@ public class RecordProcessor {
                 .id(idStrategy.getDocumentId(record, properties))
                 .vector(vectorStrategy.getDocumentVector(record, properties))
                 .build());
+    }
+
+    private boolean isDeleteOperation(SinkRecord record) {
+        var valueStruct = RecordUtils.requireStruct(record.value());
+        var __deleted = valueStruct.schema().field("__deleted") != null ? valueStruct.get("__deleted") : "false";
+        return __deleted.toString().equalsIgnoreCase("true");
     }
 
     /**

@@ -40,9 +40,11 @@ public class KafkaIdStrategy implements IDStrategy {
         // Convert key to a stable byte representation
         byte[] keyBytes = serializeKey(key);
 
-        Object id = valueProperties.remove("id");
-        if (id != null) {
-            valueProperties.put(INTERNAL_ID_FIELD, id);
+        if (valueProperties != null) {
+            Object id = valueProperties.remove("id");
+            if (id != null) {
+                valueProperties.put(INTERNAL_ID_FIELD, id);
+            }
         }
         
         // Deterministic UUID (v5-style)
