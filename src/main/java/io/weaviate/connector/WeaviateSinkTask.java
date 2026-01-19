@@ -54,6 +54,7 @@ public class WeaviateSinkTask extends SinkTask {
 
     private WeaviateSchemaManager schemaManager;
     private RecordProcessor recordProcessor;
+    private RecordDeduplicator recordDeduplicator;
     private AutoMagicSchemaMaintenance autoMagicSchemaMaintenance;
 
     /** Captures async errors from the batch callback for propagation to Kafka Connect */
@@ -109,6 +110,7 @@ public class WeaviateSinkTask extends SinkTask {
                 config.getRetryMax(),
                 config.getRetryBackoffMs()
         );
+        this.recordDeduplicator = new RecordDeduplicator(documentIdStrategy, DATA_CONVERTER);
     }
 
     @Override
@@ -131,14 +133,22 @@ public class WeaviateSinkTask extends SinkTask {
         for (Map.Entry<String, List<SinkRecord>> entry : recordsByCollection.entrySet()) {
             String collectionId = entry.getKey();
             List<SinkRecord> records = entry.getValue();
+
+            // Deduplicate records by document ID
+            Map<String, SinkRecord> deduplicatedRecordsMap = recordDeduplicator.deduplicate(records);
+            List<SinkRecord> deduplicatedRecords = new java.util.ArrayList<>(deduplicatedRecordsMap.values());
+
+            log.debug("Processing {} unique records for collection: {} (original batch size: {})",
+                    deduplicatedRecords.size(), collectionId, records.size());
+
             schemaManager.validateAndCreateCollectionIfNeeded(collectionId);
 
             List<SinkRecord> updatedRecords;
             if (config.getApplyAutomagicSchemaMaintenanceOnTopOfDbSchema()) {
                 log.debug("Applying automagic schema maintenance for collection: {}", collectionId);
-                updatedRecords = schemaManager.applyAutomagicSchemaMaintenance(collectionId, records);
+                updatedRecords = schemaManager.applyAutomagicSchemaMaintenance(collectionId, deduplicatedRecords);
             } else {
-                updatedRecords = records;
+                updatedRecords = deduplicatedRecords;
             }
 
             log.info("Processing {} records for collection: {}", updatedRecords.size(), collectionId);
